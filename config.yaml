@@ -1,12 +1,6 @@
 as_of: 2025-09-30
 start_date: 2021-09-06
 base_currency: USD
-portfolio:
-  source: excel
-  file: ./Factsheet update.xlsx
-  tabs:
-    positions: Positions
-    transactions: Transactions
 benchmarks:
   - name: ACWI
     ticker: ACWI
@@ -15,16 +9,35 @@ benchmarks:
 fx:
   source: ecb
 output:
-  ppt_template: ./Kukula Fact Sheet Growth 20250830.pptx
-  ppt_out_dir: ./dist
+  ppt_template: ./data/1_input_data/3_ppt_template/Kukula Fact Sheet Growth 20250830.pptx
+  ppt_out_dir: ./output
   charts_dir: ./dist/charts
+data_sources:
+  aggregated_amounts_dir: ./data/1_input_data/1_raw_financials
+  aggregated_amounts_pattern: AggregatedAmounts_*.xlsx
 tables:
   top_holdings_limit: 10
-  sector_map_file: ./sector_map.csv
-  region_map_file: ./region_map.csv
-  classification_cache: ./classification_cache.json
-  sector_lookup_file: ./sector_lookup.csv
-  classification_review_file: ./classified_holdings.json
+  instrument_overrides_file: ./data/1_input_data/2_mappings/instrument_overrides.csv
+  region_map_file: ./data/1_input_data/2_mappings/region_map.csv
+  classification_cache: ./data/2_fetched_data/yf_classification_cache.json
+  sector_aliases_file: ./data/1_input_data/2_mappings/sector_aliases.csv
+  classification_review_file: ./data/3_processed_data/final_classification.json
 
-
-
+commentary:
+  enabled: true
+  model: gpt-4o-mini
+  max_tokens: 205
+  temperature: 0.6
+  mode: mixed
+  max_per_feed: 3
+  max_headlines: 4
+  max_macro_headlines: 2
+  max_holdings_headlines: 2
+  rss_feeds:
+    - https://www.reuters.com/finance/markets/rss
+    - https://feeds.a.dj.com/rss/RSSMarketsMain.xml
+    - https://www.ft.com/markets?format=rss
+  exclude_keywords:
+    - boeing
+  history_file: data/3_processed_data/commentary_generation_cache.json
+  news_cache: data/2_fetched_data/news_cache.json

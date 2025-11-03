@@ -2,9 +2,9 @@ __pycache__/
 .venv/
 *.pyc
 dist/
-*.xlsx
 *.pptx
-data_cache/
-
-
+fetched_data/
+processed_data/
+input/aggregated/
+.env
 

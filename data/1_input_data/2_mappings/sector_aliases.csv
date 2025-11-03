@@ -1,0 +1,106 @@
+source_type,source_value,canonical_sector
+# yfinance broad sectors
+yf_sector,technology,Technology
+yf_sector,information technology,Technology
+yf_sector,consumer cyclical,Consumer Discretionary
+yf_sector,consumer discretionary,Consumer Discretionary
+yf_sector,consumer defensive,Consumer Staples
+yf_sector,communication services,Consumer Discretionary
+yf_sector,industrials,Industrials
+yf_sector,energy,Transportation
+yf_sector,financial services,Financial services
+yf_sector,financial,Financial services
+yf_sector,healthcare,Healthcare
+yf_sector,health care,Healthcare
+yf_sector,basic materials,Materials
+yf_sector,materials,Materials
+yf_sector,utilities,Utilities
+yf_sector,real estate,Financial services
+yf_sector,services,Consumer Discretionary
+yf_sector,other,Consumer Discretionary
+yf_sector,conglomerates,Financial services
+# industries -> sectors
+industry,semiconductors,Technology
+industry,semiconductor equipment & materials,Technology
+industry,software—application,Technology
+industry,software—infrastructure,Technology
+industry,information technology services,Technology
+industry,communication equipment,Technology
+industry,consumer electronics,Consumer Discretionary
+industry,computer hardware,Technology
+industry,credit services,Financial services
+industry,financial data & stock exchanges,Financial services
+industry,asset management,Financial services
+industry,banks—diversified,Financial services
+industry,banks—regional,Financial services
+industry,capital markets,Financial services
+industry,insurance—diversified,Financial services
+industry,insurance—property & casualty,Financial services
+industry,insurance brokers,Financial services
+industry,utilities—regulated electric,Utilities
+industry,utilities—regulated gas,Utilities
+industry,utilities—regulated water,Utilities
+industry,utilities—independent power producers,Utilities
+industry,oil & gas e&p,Transportation
+industry,oil & gas integrated,Transportation
+industry,oil & gas refining & marketing,Transportation
+industry,oil & gas midstream,Transportation
+industry,shipping,Transportation
+industry,airlines,Transportation
+industry,airports & air services,Transportation
+industry,marine shipping,Transportation
+industry,railroads,Transportation
+industry,truck manufacturing,Transportation
+industry,auto manufacturers,Consumer Discretionary
+industry,auto parts,Consumer Discretionary
+industry,travel services,Consumer Discretionary
+industry,leisure,Consumer Discretionary
+industry,restaurants,Consumer Discretionary
+industry,retail—apparel & specialty,Consumer Discretionary
+industry,retail—discretionary,Consumer Discretionary
+industry,retail—defensive,Consumer Staples
+industry,discount stores,Consumer Staples
+industry,household & personal products,Consumer Staples
+industry,packaged foods,Consumer Staples
+industry,beverages—non-alcoholic,Consumer Staples
+industry,beverages—brewers,Consumer Staples
+industry,food distribution,Consumer Staples
+industry,drug manufacturers—general,Healthcare
+industry,drug manufacturers—specialty & generic,Healthcare
+industry,biotechnology,Healthcare
+industry,medical care facilities,Healthcare
+industry,medical devices,Healthcare
+industry,medical distribution,Healthcare
+industry,diagnostics & research,Healthcare
+industry,medical instruments & supplies,Healthcare
+industry,healthcare plans,Healthcare
+industry,engineering & construction,Transportation
+industry,consulting services,Financial services
+industry,staffing & employment services,Consumer Discretionary
+industry,industrial distribution,Transportation
+industry,metal fabrication,Materials
+industry,steel,Materials
+industry,aluminum,Materials
+industry,copper,Materials
+industry,gold,Materials
+industry,silver,Materials
+industry,other industrial metals & mining,Materials
+industry,agricultural inputs,Materials
+industry,chemicals,Materials
+industry,specialty chemicals,Materials
+industry,building materials,Materials
+industry,construction materials,Materials
+industry,waste management,Utilities
+industry,forestry & wood products,Materials
+industry,paper & paper products,Materials
+industry,real estate services,Financial services
+industry,reit—specialty,Financial services
+industry,reit—industrial,Financial services
+industry,reit—office,Financial services
+industry,reit—retail,Financial services
+industry,reit—residential,Financial services
+# catch-all
+industry,capital goods,Transportation
+industry,services,Consumer Discretionary
+industry,technology hardware,Technology
+industry,specialty industrial machinery,Industrials

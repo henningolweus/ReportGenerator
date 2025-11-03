@@ -1,6 +1,6 @@
 from pptx import Presentation
 from pptx.util import Inches, Pt
-from pptx.enum.shapes import MSO_SHAPE
+from pptx.enum.shapes import MSO_SHAPE, MSO_SHAPE_TYPE
 from pptx.enum.text import PP_ALIGN
 from pptx.dml.color import RGBColor
 from pptx.enum.dml import MSO_COLOR_TYPE
@@ -14,10 +14,18 @@ def open_presentation(path: str):
     return Presentation(path)
 
 
+def _iter_shapes(shapes):
+    for shp in shapes:
+        yield shp
+        if shp.shape_type == MSO_SHAPE_TYPE.GROUP:
+            yield from _iter_shapes(shp.shapes)
+
+
 def set_text_by_name(slides, name: str, text: str) -> bool:
+    target_name = str(name)
     for slide in slides:
-        for shp in slide.shapes:
-            if shp.name == name and hasattr(shp, "text_frame"):
+        for shp in _iter_shapes(slide.shapes):
+            if getattr(shp, "name", None) == target_name and hasattr(shp, "text_frame"):
                 tf = shp.text_frame
                 if tf.paragraphs and tf.paragraphs[0].runs:
                     # Preserve formatting by editing first run in place
@@ -283,5 +291,4 @@ def get_chart_structure(slides, name: str):
         'series_names': series_names,
         'points_per_series': points_per_series,
     }
-
 

@@ -177,6 +177,7 @@ def write_table_to_excel(path: str, sheet_name: str, top_left_cell: str, df: pd.
     Optionally define a named range that spans the written table (including header).
     """
     try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
         wb = load_workbook(path)
     except FileNotFoundError:
         wb = Workbook()
@@ -413,7 +414,7 @@ def resolve_symbol_classification(symbol: str | None,
                                   name: str | None,
                                   overrides: dict,
                                   cache: dict,
-                                  sector_lookup: dict) -> tuple[str | None, str | None, str | None, str | None, str | None, bool]:
+                                  sector_lookup: dict) -> tuple[str | None, str | None, str | None, str | None, str | None, str | None, str | None, bool]:
     cache_changed = False
     symbol_key = canonical_symbol(symbol)
     name_str = str(name).strip() if name is not None else ""
@@ -588,3 +589,6 @@ def load_accumulated_twr_from_performance(path: str) -> pd.Series:
     out = pd.Series(vals.values, index=sub[date_col].values).sort_index()
     out = out[~out.index.duplicated(keep='first')]
     return out
+
+
+

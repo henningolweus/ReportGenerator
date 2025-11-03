@@ -9,7 +9,14 @@ import math
 import yaml
 import pandas as pd
 
-from . import calc, data, charts, ppt
+try:  # optional dependency
+    from dotenv import load_dotenv  # type: ignore
+
+    load_dotenv()
+except Exception:
+    pass
+
+from . import calc, data, charts, ppt, commentary
 
 
 def load_config(config_path: str) -> dict:
@@ -122,7 +129,11 @@ def build(config_path: str) -> str:
 
     # Replace a couple of text placeholders if present
     prs = ppt.open_presentation(prs_path)
-    date_ok = ppt.set_text_by_name(prs.slides, "DATE_ISSUED", as_of.strftime("%d %B %Y"))
+    today = dt.date.today()
+    issued_text = f"Fact Sheet|Issued {today.strftime('%d %B %Y')}"
+    date_primary_ok = ppt.set_text_by_name(prs.slides, "DATE_ISSUED", issued_text)
+    date_secondary_ok = ppt.set_text_by_name(prs.slides, "DATE_ISSUED_2", issued_text)
+    date_ok = date_primary_ok or date_secondary_ok
     bench_ok = ppt.set_text_by_name(prs.slides, "BENCH_NAME", cfg["benchmarks"][0]["name"]) if cfg.get("benchmarks") else False
 
     # Drop demo chart into placeholder if present
@@ -133,7 +144,29 @@ def build(config_path: str) -> str:
     inferred_start: pd.Timestamp | None = None
     perf_categories = None
     port_usd = None
-    perf_file = Path("AggregatedAmounts_15336611_2021-06-01_2025-10-15 (1).xlsx")
+    data_sources = cfg.get("data_sources", {})
+    perf_file_cfg = data_sources.get("aggregated_amounts_file") or cfg.get("aggregated_amounts_file")
+    perf_dir_cfg = data_sources.get("aggregated_amounts_dir")
+    perf_pattern = data_sources.get("aggregated_amounts_pattern", "*.xlsx")
+
+    perf_file: Path | None = None
+    if perf_file_cfg:
+        perf_file = Path(perf_file_cfg)
+    elif perf_dir_cfg:
+        dir_path = Path(perf_dir_cfg)
+        dir_path.mkdir(parents=True, exist_ok=True)
+        if dir_path.is_dir():
+            candidates = sorted(
+                dir_path.glob(perf_pattern),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if candidates:
+                perf_file = candidates[0]
+    if perf_file is None:
+        perf_file = Path("AggregatedAmounts_15336611_2021-06-01_2025-10-15 (1).xlsx")
+    if not perf_file.exists():
+        raise FileNotFoundError(f"Aggregated amounts file not found: {perf_file}")
 
     # Load daily returns once for metrics
     daily_returns_full = None
@@ -383,9 +416,9 @@ def build(config_path: str) -> str:
     classified_records = []
     classification_cache_path = cfg.get("tables", {}).get("classification_cache")
     classification_cache = data.load_classification_cache(classification_cache_path)
-    overrides = data.load_symbol_overrides(cfg.get("tables", {}).get("sector_map_file"))
+    overrides = data.load_symbol_overrides(cfg.get("tables", {}).get("instrument_overrides_file"))
     region_map = data.load_country_region_map(cfg.get("tables", {}).get("region_map_file"))
-    sector_lookup = data.load_sector_lookup(cfg.get("tables", {}).get("sector_lookup_file"))
+    sector_lookup = data.load_sector_lookup(cfg.get("tables", {}).get("sector_aliases_file"))
 
     if holdings_raw is None:
         try:
@@ -656,8 +689,54 @@ def build(config_path: str) -> str:
     if not chart_ok:
         ppt.add_picture_slide(prs, perf_line_path, title_text="Performance (demo)")
     if not date_ok:
-        ppt.add_textbox_slide(prs, title="Date Issued", body=as_of.strftime("%d %B %Y"))
+        ppt.add_textbox_slide(prs, title="Date Issued", body=issued_text)
 
+    commentary_cfg = cfg.get("commentary", {})
+    if commentary_cfg.get("enabled", False):
+        sector_for_prompt: list[tuple[str, float]] = []
+        if sector_weights:
+            for label in sector_display_order:
+                value = sector_weights.get(label, 0.0)
+                if value > 0.001:
+                    sector_for_prompt.append((label, value))
+        region_for_prompt: list[tuple[str, float]] = []
+        if region_weights:
+            for label in region_display_order:
+                value = region_weights.get(label, 0.0)
+                if value > 0.001:
+                    region_for_prompt.append((label, value))
+        holdings_for_prompt = sorted(classified_records, key=lambda item: item.get("weight", 0.0), reverse=True)[:10]
+
+        commentary_context = {
+            "as_of": as_of.isoformat(),
+            "portfolio": {
+                "ytd": format_pct(ytd_return),
+                "since_inception": format_pct(ret_since_incept),
+                "cagr": format_pct(avg_yearly_return),
+            },
+            "benchmark": {
+                "ytd": format_pct(bench_ytd) if bench_ytd is not None else "n/a",
+                "cagr": format_pct(bench_cagr) if bench_cagr is not None else "n/a",
+            },
+            "sectors": sector_for_prompt,
+            "regions": region_for_prompt,
+            "holdings": holdings_for_prompt,
+        }
+
+        commentary_result = commentary.generate_commentary(commentary_context, commentary_cfg)
+        commentary_text = commentary_result.get("text", "")
+        if commentary_text:
+            ppt.set_text_by_name(prs.slides, "COMMENTARY_TEXT", commentary_text)
+        history_path = commentary_cfg.get("history_file") or commentary_cfg.get("save_debug_file")
+        if history_path:
+            history_path_obj = Path(history_path)
+            history_path_obj.parent.mkdir(parents=True, exist_ok=True)
+            debug_payload = {
+                "context": commentary_context,
+                "result": commentary_result,
+                "run_at": dt.datetime.now().isoformat(),
+            }
+            commentary.save_debug_payload(debug_payload, str(history_path_obj))
     ppt.set_text_by_name(prs.slides, "RET_SINCE_INCEPT", format_pct(ret_since_incept))
     ppt.set_text_by_name(prs.slides, "YTD_RETURN_USD", format_pct(ytd_return))
     ppt.set_text_by_name(prs.slides, "AVG_Y_COMP_RET_SINCE_INCEPT", format_pct(avg_yearly_return))
@@ -665,6 +744,7 @@ def build(config_path: str) -> str:
     review_path = cfg.get("tables", {}).get("classification_review_file")
     if classified_records and review_path:
         try:
+            Path(review_path).parent.mkdir(parents=True, exist_ok=True)
             with open(review_path, "w", encoding="utf-8") as f:
                 json.dump(classified_records, f, indent=2, sort_keys=False)
         except OSError:
@@ -725,15 +805,6 @@ def build(config_path: str) -> str:
     )
     ppt.write_table_by_name(prs.slides, "FEES_TABLE", fees_df)
 
-    # Also write these tables to Excel for native chart links
-    excel_path = cfg["portfolio"]["file"] if cfg.get("portfolio", {}).get("file") else "Factsheet update.xlsx"
-    try:
-        data.write_table_to_excel(excel_path, "FactsheetCharts", "A1", m_df, named_range="MonthlyReturnsTable")
-        data.write_table_to_excel(excel_path, "FactsheetCharts", "Q1", vol_df, named_range="VolatilityTable")
-        data.write_table_to_excel(excel_path, "FactsheetCharts", "Q10", fees_df, named_range="FeesTable")
-    except Exception:
-        pass
-
     # Save
     prs.save(out_path)
     return out_path
@@ -775,3 +846,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
