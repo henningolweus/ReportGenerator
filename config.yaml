@@ -1,4 +1,4 @@
-as_of: 2025-09-30
+as_of: 2025-10-31
 start_date: 2021-09-06
 base_currency: USD
 benchmarks:
@@ -26,17 +26,36 @@ tables:
 commentary:
   enabled: true
   model: gpt-4o-mini
-  max_tokens: 205
+  max_tokens: 300  # Increased to ensure no mid-sentence cutoffs (prompt targets 150-160 words)
   temperature: 0.6
   mode: mixed
-  max_per_feed: 3
-  max_headlines: 4
-  max_macro_headlines: 2
-  max_holdings_headlines: 2
+  max_per_feed: 50  # Fetch up to 50 articles per feed within date range
+  news_per_ticker: 5  # Number of most relevant news articles to keep per ticker
+  max_headlines: 20   # Final limit for commentary (after AI + keyword filtering)
+  max_macro_headlines: 10
+  max_holdings_headlines: 10
+  max_news_age_days: 30  # Only fetch news from max_news_age_days before as_of_date to as_of_date
   rss_feeds:
-    - https://www.reuters.com/finance/markets/rss
-    - https://feeds.a.dj.com/rss/RSSMarketsMain.xml
-    - https://www.ft.com/markets?format=rss
+    # Google News (automatically includes date-appropriate content)
+    - https://news.google.com/rss/search?q=stock+market&hl=en-US&gl=US&ceid=US:en
+    - https://news.google.com/rss/search?q=stocks&hl=en-US&gl=US&ceid=US:en
+    - https://news.google.com/rss/topics/CAAqJggKIiBDQkFTRWdvSUwyMHZNRGx6TVdZU0FtVnVHZ0pWVXlnQVAB?hl=en-US&gl=US&ceid=US:en  # Google News Business
+    # General Market News (with stock coverage)
+    - https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC&region=US&lang=en-US  # Yahoo Finance S&P 500
+    - https://feeds.finance.yahoo.com/rss/2.0/headline?s=^DJI&region=US&lang=en-US   # Dow Jones
+    - https://feeds.finance.yahoo.com/rss/2.0/headline?s=^IXIC&region=US&lang=en-US  # Nasdaq
+    # Financial News Sites
+    - https://www.cnbc.com/id/100003114/device/rss/rss.html  # CNBC Markets
+    - https://www.cnbc.com/id/10000664/device/rss/rss.html   # CNBC Stocks
+    - https://www.cnbc.com/id/10001147/device/rss/rss.html   # CNBC Earnings
+    - https://feeds.marketwatch.com/marketwatch/topstories/  # MarketWatch Top Stories
+    - https://feeds.marketwatch.com/marketwatch/marketpulse/  # MarketWatch Market Pulse
+    - https://www.investing.com/rss/news.rss  # Investing.com News
+    - https://www.investing.com/rss/news_25.rss  # Investing.com Stock Market News
+    - https://seekingalpha.com/feed.xml  # Seeking Alpha
+    # Reuters & Bloomberg-style
+    - https://feeds.a.dj.com/rss/RSSMarketsMain.xml  # Dow Jones Markets
+    - https://feeds.a.dj.com/rss/WSJcomUSBusiness.xml  # WSJ US Business
   exclude_keywords:
     - boeing
   history_file: data/3_processed_data/commentary_generation_cache.json

@@ -11,3 +11,4 @@ pywin32>=306; platform_system == "Windows"
 feedparser>=6.0.11
 openai>=1.34.0
 python-dotenv>=1.0.1
+python-dateutil>=2.8.2
