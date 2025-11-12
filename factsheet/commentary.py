@@ -313,8 +313,8 @@ def fetch_ticker_news_google(
             as_of_dt = None
             min_dt = None
 
-    # Get top 5 holdings
-    for holding in holdings[:5]:
+    # Process all holdings passed in
+    for holding in holdings:
         symbol = holding.get('yf_symbol') or holding.get('symbol')
         name = holding.get('name', '')
         if not symbol or symbol in ('CASH', 'USD', 'CASHUSD'):
@@ -418,8 +418,8 @@ def fetch_ticker_news(
             as_of_dt = None
             min_dt = None
 
-    # Get top 5 holdings only (most important)
-    for holding in holdings[:5]:
+    # Process all holdings passed in
+    for holding in holdings:
         symbol = holding.get('yf_symbol') or holding.get('symbol')
         name = holding.get('name', '')
         if not symbol or symbol in ('CASH', 'USD', 'CASHUSD'):
@@ -511,6 +511,8 @@ def filter_news_per_ticker_with_ai(
     target_count: int,
     api_key: str,
     model: str = "gpt-4o-mini",
+    monthly_return: float | None = None,
+    performance_type: str | None = None,
 ) -> List[FeedSnippet]:
     """Use AI to select the most relevant news articles for a specific ticker.
 
@@ -521,6 +523,8 @@ def filter_news_per_ticker_with_ai(
         target_count: Number of articles to select
         api_key: OpenAI API key
         model: OpenAI model to use
+        monthly_return: Monthly return as decimal (e.g., 0.11 for 11%)
+        performance_type: Either 'winner' or 'loser'
 
     Returns:
         Filtered list of most relevant snippets
@@ -536,18 +540,31 @@ def filter_news_per_ticker_with_ai(
     for idx, snippet in enumerate(snippets):
         news_items.append(f"{idx}. {snippet.title} - {snippet.summary[:150]}")
 
-    prompt = f"""You are filtering news for {ticker_name} ({ticker_symbol}).
+    # Build performance context
+    perf_context = ""
+    if monthly_return is not None and performance_type:
+        perf_pct = monthly_return * 100
+        if performance_type == 'winner':
+            perf_context = f"\nContext: {ticker_name} was a TOP PERFORMER this month with a return of {perf_pct:+.1f}%."
+        else:
+            perf_context = f"\nContext: {ticker_name} was a BOTTOM PERFORMER this month with a return of {perf_pct:+.1f}%."
+
+    prompt = f"""You are filtering news for {ticker_name} ({ticker_symbol}).{perf_context}
 
 News Items (numbered 0-{len(snippets)-1}):
 {chr(10).join(news_items)}
 
-Select the {target_count} MOST RELEVANT and IMPACTFUL news articles about {ticker_name} that would help explain:
-- Company performance, earnings, or financial results
-- Major business developments or strategic changes
-- Industry trends affecting this company
-- Analyst opinions or ratings
+Select the {target_count} news articles that BEST EXPLAIN why {ticker_name} {'gained' if performance_type == 'winner' else 'lost'} value this month.
 
-Exclude generic market news unless it specifically impacts this company.
+Focus on articles that discuss:
+- Specific events, earnings, or announcements that drove the stock price
+- Business developments, strategic changes, or operational updates
+- Analyst upgrades/downgrades or rating changes
+- Industry trends or competitive dynamics affecting this company
+- Any significant news that would explain the {'positive' if performance_type == 'winner' else 'negative'} performance
+
+Prioritize RECENT news from this month that directly relates to stock price movement.
+Exclude generic market news unless it specifically and clearly impacted this company.
 
 Respond with ONLY a JSON array of exactly {target_count} numbers, e.g., [0, 2, 5, 8, 11]"""
 
@@ -576,6 +593,94 @@ Respond with ONLY a JSON array of exactly {target_count} numbers, e.g., [0, 2, 5
     return list(snippets[:target_count])
 
 
+def filter_market_news_with_ai(
+    snippets: List[FeedSnippet],
+    context: Dict[str, Any],
+    target_count: int,
+    api_key: str,
+    model: str = "gpt-4o-mini",
+) -> List[FeedSnippet]:
+    """Use AI to select the most relevant general market news articles.
+
+    Args:
+        snippets: List of market news snippets
+        context: Portfolio context (for understanding relevance)
+        target_count: Number of articles to select
+        api_key: OpenAI API key
+        model: OpenAI model to use
+
+    Returns:
+        Filtered list of most relevant market news snippets
+    """
+    if not snippets or len(snippets) <= target_count:
+        return list(snippets)
+
+    if not api_key:
+        return list(snippets[:target_count])
+
+    # Create numbered list of news items
+    news_items = []
+    for idx, snippet in enumerate(snippets):
+        news_items.append(f"{idx}. {snippet.title} - {snippet.summary[:150]}")
+
+    # Get portfolio context
+    as_of = context.get("as_of", "")
+    sectors = context.get("sectors", [])
+    regions = context.get("regions", [])
+
+    # Build sector/region context
+    top_sectors = ", ".join([s[0] for s in sectors[:3]]) if sectors else "diversified"
+    top_regions = ", ".join([r[0] for r in regions[:3]]) if regions else "global"
+
+    prompt = f"""You are filtering general market news for an investment portfolio commentary.
+
+Portfolio Context:
+- Date: {as_of}
+- Top sectors: {top_sectors}
+- Top regions: {top_regions}
+
+News Items (numbered 0-{len(snippets)-1}):
+{chr(10).join(news_items)}
+
+Select the {target_count} news articles that provide the BEST MARKET CONTEXT for this portfolio.
+
+Focus on articles about:
+- Broad market trends, indices, or economic conditions
+- Sector-specific trends relevant to the portfolio's holdings
+- Regional economic developments or geopolitical events
+- Central bank policy, interest rates, or macroeconomic indicators
+- Major market-moving events that affect overall investor sentiment
+
+Prioritize news that helps explain the broader market environment during this period.
+Exclude company-specific news unless it had significant market-wide impact.
+
+Respond with ONLY a JSON array of exactly {target_count} numbers, e.g., [0, 2, 5, 8, 11]"""
+
+    try:
+        client = OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=100,
+        )
+        content = response.choices[0].message.content.strip()
+
+        # Parse JSON array from response
+        import json
+        import re
+        match = re.search(r'\[[\d,\s]+\]', content)
+        if match:
+            selected_indices = json.loads(match.group(0))
+            selected_indices = [i for i in selected_indices if 0 <= i < len(snippets)]
+            return [snippets[i] for i in selected_indices[:target_count]]
+    except Exception as e:
+        print(f"  Warning: AI filtering failed for market news: {e}")
+
+    # Fallback: return first target_count items
+    return list(snippets[:target_count])
+
+
 def extract_ticker_news_from_market_feeds(
     holdings: List[Dict[str, Any]],
     market_snippets: Sequence[FeedSnippet],
@@ -591,8 +696,8 @@ def extract_ticker_news_from_market_feeds(
     news_by_ticker: Dict[str, List[FeedSnippet]] = {}
     used_titles: set = set()  # Track to avoid duplicates
 
-    # Get top 5 holdings
-    for holding in holdings[:5]:
+    # Process all holdings passed in
+    for holding in holdings:
         symbol = holding.get('yf_symbol') or holding.get('symbol')
         name = holding.get('name', '')
         if not symbol or symbol in ('CASH', 'USD', 'CASHUSD'):
@@ -887,13 +992,35 @@ def build_prompt(context: Dict[str, Any], snippets: Sequence[FeedSnippet]) -> st
     sectors = context.get("sectors", [])
     regions = context.get("regions", [])
     holdings = context.get("holdings", [])
+    top_winners = context.get("top_winners", [])
+    top_losers = context.get("top_losers", [])
+
+    # Check if portfolio is underperforming benchmark in the current month
+    portfolio_mtd = portfolio.get('mtd', '')
+    benchmark_mtd = benchmark.get('mtd', '')
+    is_underperforming = False
+
+    try:
+        # Parse MTD strings (e.g., "5.2%" -> 5.2, "-2.3%" -> -2.3)
+        if portfolio_mtd and benchmark_mtd and portfolio_mtd != 'n/a' and benchmark_mtd != 'n/a':
+            port_val = float(str(portfolio_mtd).rstrip('%'))
+            bench_val = float(str(benchmark_mtd).rstrip('%'))
+            is_underperforming = port_val < bench_val
+    except (ValueError, AttributeError):
+        pass
+
+    performance_guidance = ""
+    if is_underperforming:
+        performance_guidance = " ONLY mention that performance is behind the benchmark if underperforming, and VERY BRIEFLY (1 sentence) explain why based on the news provided."
+    else:
+        performance_guidance = " DO NOT mention performance relative to the benchmark - focus only on drivers and context."
 
     lines = [
         "You are crafting a concise manager's commentary for an investment factsheet.",
         "Write EXACTLY 150-160 words in a professional, balanced tone with two to three short paragraphs.",
         "",
         "STRUCTURE:",
-        "1. First paragraph (60-70 words): Discuss the main drivers of portfolio performance. Focus on WHY the portfolio performed as it did - identify which holdings or sectors were primary contributors or detractors and explain the reasons based on the news provided.",
+        f"1. First paragraph (60-70 words): Discuss the main drivers of portfolio performance. Focus on WHY the portfolio performed as it did - identify which holdings or sectors were primary contributors or detractors and explain the reasons based on the news provided.{performance_guidance}",
         "2. Second paragraph (50-60 words): Broader market context and outlook. Discuss relevant market trends, economic factors, or sector dynamics that affected or may affect the portfolio.",
         "3. Optional brief third paragraph (30-40 words): Forward-looking considerations or positioning if relevant.",
         "",
@@ -907,8 +1034,10 @@ def build_prompt(context: Dict[str, Any], snippets: Sequence[FeedSnippet]) -> st
         "",
         "CONTEXT:",
         f"Factsheet Date: {as_of}",
-        f"Portfolio YTD: {portfolio.get('ytd')} (for context only - don't repeat in commentary)",
-        f"Benchmark YTD: {benchmark.get('ytd')} (for context only - don't repeat in commentary)",
+        f"Portfolio MTD (Current Month): {portfolio.get('mtd')} (for context only - don't repeat exact numbers)",
+        f"Benchmark MTD (Current Month): {benchmark.get('mtd')} (for context only - don't repeat exact numbers)",
+        f"Portfolio YTD: {portfolio.get('ytd')} (for context only - don't repeat exact numbers)",
+        f"Benchmark YTD: {benchmark.get('ytd')} (for context only - don't repeat exact numbers)",
     ]
 
     if sectors:
@@ -918,8 +1047,36 @@ def build_prompt(context: Dict[str, Any], snippets: Sequence[FeedSnippet]) -> st
         region_lines = ", ".join(f"{name}: {value:.1%}" for name, value in regions[:3])
         lines.append(f"Regional Allocations: {region_lines}")
     if holdings:
-        holdings_text = ", ".join(f"{item['name']} ({item['weight_pct']:.1f}%)" for item in holdings[:5])
+        holdings_parts = []
+        for item in holdings[:5]:
+            name = item['name']
+            weight = item['weight_pct']
+            # Include monthly return if available
+            if 'monthly_return' in item and item['monthly_return'] is not None:
+                monthly_ret = item['monthly_return']
+                holdings_parts.append(f"{name} ({weight:.1f}%, MTD: {monthly_ret:.1%})")
+            else:
+                holdings_parts.append(f"{name} ({weight:.1f}%)")
+        holdings_text = ", ".join(holdings_parts)
         lines.append(f"Top 5 Holdings: {holdings_text}")
+
+    if top_winners:
+        lines.append("")
+        lines.append("TOP PERFORMERS THIS MONTH (by value contribution - use these to explain positive drivers):")
+        for item in top_winners:
+            return_pct = item['return']
+            value_add = item.get('value_add', 0)
+            weight = item.get('weight', 0)
+            lines.append(f"  • {item['name']} ({item['symbol']}): {return_pct:+.1%} return, {weight:.1%} weight, +{value_add:.2%} contribution")
+
+    if top_losers:
+        lines.append("")
+        lines.append("WORST PERFORMERS THIS MONTH (by value impact - use these to explain negative drivers):")
+        for item in top_losers:
+            return_pct = item['return']
+            value_add = item.get('value_add', 0)
+            weight = item.get('weight', 0)
+            lines.append(f"  • {item['name']} ({item['symbol']}): {return_pct:+.1%} return, {weight:.1%} weight, {value_add:+.2%} contribution")
 
     if snippets:
         lines.append("")
@@ -954,28 +1111,66 @@ def generate_commentary(context: Dict[str, Any], config: Dict[str, Any]) -> Dict
     max_age_days = _coerce_int(config.get("max_news_age_days"), 30) or 30
 
     # Fetch general market news FIRST - this is important for market context
-    print(f"\nFetching general market news...")
+    print(f"\nFetching general market news from Google News...")
     try:
-        market_snippets = fetch_rss_snippets(
+        market_snippets_raw = fetch_rss_snippets(
             rss_feeds,
             max_per_feed=max_per_feed,
             max_chars=max_summary_chars,
             cutoff_date=as_of_date,
             max_age_days=max_age_days,
         )
+        print(f"  Fetched {len(market_snippets_raw)} market news articles")
+
+        # Apply AI filtering to market news
+        max_market_news = _coerce_int(config.get("max_macro_headlines"), 10) or 10
+        print(f"  Applying AI filtering to select top {max_market_news} market articles...")
+        model = config.get("model", "gpt-4o-mini")
+        market_snippets = filter_market_news_with_ai(
+            market_snippets_raw,
+            context,
+            max_market_news,
+            api_key,
+            model,
+        )
+        print(f"  ✓ Selected {len(market_snippets)} market articles")
     except Exception as e:
-        print(f"Warning: Failed to fetch market news: {e}")
+        print(f"Warning: Failed to fetch/filter market news: {e}")
         market_snippets = []
 
     # Get news_per_ticker config
     news_per_ticker = _coerce_int(config.get("news_per_ticker"), 5) or 5
-    holdings = context.get("holdings", [])
 
-    # 1. Fetch from Google News (best date filtering and search)
-    print(f"\nFetching ticker news from Google News RSS...")
+    # Get top winners and losers
+    top_winners = context.get("top_winners", [])
+    top_losers = context.get("top_losers", [])
+
+    # Build list of stocks to fetch news for (only winners and losers)
+    stocks_for_news = []
+    for winner in top_winners:
+        stocks_for_news.append({
+            'symbol': winner.get('symbol'),
+            'yf_symbol': winner.get('symbol'),
+            'name': winner.get('name'),
+            'return': winner.get('return'),
+            'performance_type': 'winner'
+        })
+    for loser in top_losers:
+        stocks_for_news.append({
+            'symbol': loser.get('symbol'),
+            'yf_symbol': loser.get('symbol'),
+            'name': loser.get('name'),
+            'return': loser.get('return'),
+            'performance_type': 'loser'
+        })
+
+    print(f"\nFetching stock-specific news from Google News for {len(stocks_for_news)} top performers...")
+
+    # Fetch from Google News only
+    google_news_dict = {}
     try:
         google_news_dict = fetch_ticker_news_google(
-            holdings,
+            stocks_for_news,
             max_per_ticker=30,  # Fetch up to 30, will filter to news_per_ticker later
             max_chars=max_summary_chars,
             cutoff_date=as_of_date,
@@ -983,58 +1178,28 @@ def generate_commentary(context: Dict[str, Any], config: Dict[str, Any]) -> Dict
         )
     except Exception as e:
         print(f"Warning: Failed to fetch Google News: {e}")
-        google_news_dict = {}
 
-    # 2. Fetch from Yahoo Finance RSS (ticker-specific feeds)
-    print(f"\nFetching ticker-specific news from Yahoo Finance RSS...")
-    try:
-        ticker_news_dict = fetch_ticker_news(
-            holdings,
-            max_per_ticker=30,  # Fetch up to 30, will filter to news_per_ticker later
-            max_chars=max_summary_chars,
-            cutoff_date=as_of_date,
-            max_age_days=max_age_days,
-        )
-    except Exception as e:
-        print(f"Warning: Failed to fetch ticker news: {e}")
-        ticker_news_dict = {}
-
-    # 3. FALLBACK: Extract ticker-relevant news from market feeds
-    # This helps when direct ticker feeds don't work well
-    print(f"\nExtracting ticker-relevant news from market feeds (fallback)...")
-    try:
-        extracted_news_dict = extract_ticker_news_from_market_feeds(
-            holdings,
-            market_snippets,
-            max_per_ticker=30,  # Fetch up to 30, will filter later
-        )
-    except Exception as e:
-        print(f"Warning: Failed to extract ticker news from market feeds: {e}")
-        extracted_news_dict = {}
-
-    # Combine news from all sources per ticker
-    print(f"\nApplying AI filtering per ticker (selecting top {news_per_ticker} articles per ticker)...")
+    # Apply AI filtering per ticker with focus on explaining monthly performance
+    print(f"\nApplying AI filtering to select news explaining performance (top {news_per_ticker} per stock)...")
     filtered_ticker_news = []
     model = config.get("model", "gpt-4o-mini")
 
-    for holding in holdings[:5]:
-        symbol = holding.get('yf_symbol') or holding.get('symbol')
-        name = holding.get('name', '')
+    for stock in stocks_for_news:
+        symbol = stock.get('symbol')
+        name = stock.get('name', '')
+        monthly_return = stock.get('return', 0)
+        perf_type = stock.get('performance_type')
+
         if not symbol or symbol in ('CASH', 'USD', 'CASHUSD'):
             continue
 
-        # Combine news from all three sources for this ticker
-        ticker_news = (
-            google_news_dict.get(symbol, []) +
-            ticker_news_dict.get(symbol, []) +
-            extracted_news_dict.get(symbol, [])
-        )
+        ticker_news = google_news_dict.get(symbol, [])
 
         if not ticker_news:
             print(f"  • {name} ({symbol}): No news found")
             continue
 
-        # Apply AI filtering to select best news_per_ticker articles
+        # Apply AI filtering focused on explaining the return
         filtered = filter_news_per_ticker_with_ai(
             ticker_symbol=symbol,
             ticker_name=name,
@@ -1042,44 +1207,24 @@ def generate_commentary(context: Dict[str, Any], config: Dict[str, Any]) -> Dict
             target_count=news_per_ticker,
             api_key=api_key,
             model=model,
+            monthly_return=monthly_return,
+            performance_type=perf_type,
         )
 
-        print(f"  • {name} ({symbol}): {len(ticker_news)} → {len(filtered)} articles")
+        print(f"  • {name} ({symbol}, {monthly_return:+.1%}): {len(ticker_news)} → {len(filtered)} articles")
         filtered_ticker_news.extend(filtered)
 
-    # Combine ticker news with market news
-    all_snippets = filtered_ticker_news + market_snippets
-    print(f"\n  Summary: {len(filtered_ticker_news)} ticker-specific + {len(market_snippets)} market-general = {len(all_snippets)} total articles for final filtering")
+    # Combine AI-filtered ticker news with AI-filtered market news
+    # Both have been filtered already, so just concatenate them
+    filtered_snippets = filtered_ticker_news + market_snippets
+    print(f"\n  Summary: {len(filtered_ticker_news)} stock-specific + {len(market_snippets)} market = {len(filtered_snippets)} total articles for commentary")
 
+    # Save all snippets to cache
     news_cache_path = config.get("news_cache")
     if news_cache_path:
-        save_news_cache(all_snippets, news_cache_path)
+        save_news_cache(filtered_snippets, news_cache_path)
 
-    # Apply AI-based filtering to select most relevant from combined pool
-    print(f"\nApplying final AI filtering to select best articles for commentary...")
-    filtered_snippets: List[FeedSnippet]
-    snippet_debug: List[Dict[str, Any]]
-
-    if len(all_snippets) > 0:
-        try:
-            # AI filtering to select most relevant articles
-            ai_filtered = filter_snippets_with_ai(all_snippets, context, config)
-            # Don't apply keyword filtering after AI - let AI make the final call
-            filtered_snippets = ai_filtered
-            snippet_debug = [{"source": s.source, "title": s.title, "published": s.published} for s in ai_filtered]
-            print(f"  ✓ Selected {len(filtered_snippets)} articles for commentary generation")
-        except Exception as e:
-            print(f"Warning: AI filtering failed: {e}")
-            # Fallback: take first few from each category
-            max_headlines = config.get("max_headlines", 4)
-            # Take mix: 60% ticker news, 40% market news
-            ticker_count = min(len(ticker_snippets), max(1, int(max_headlines * 0.6)))
-            market_count = max_headlines - ticker_count
-            filtered_snippets = ticker_snippets[:ticker_count] + market_snippets[:market_count]
-            snippet_debug = []
-    else:
-        filtered_snippets = []
-        snippet_debug = []
+    snippet_debug = [{"source": s.source, "title": s.title, "published": s.published} for s in filtered_snippets]
 
     prompt = build_prompt(context, filtered_snippets)
     client = OpenAI(api_key=api_key)
@@ -1116,7 +1261,7 @@ def generate_commentary(context: Dict[str, Any], config: Dict[str, Any]) -> Dict
         "prompt": prompt,
         "snippets": [snippet.__dict__ for snippet in filtered_snippets],
         "snippet_debug": snippet_debug,
-        "fetched_snippets": [snippet.__dict__ for snippet in all_snippets],
+        "fetched_snippets": [snippet.__dict__ for snippet in filtered_snippets],
     }
 
 

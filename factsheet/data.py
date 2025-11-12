@@ -11,16 +11,130 @@ from openpyxl.utils import get_column_letter
 
 
 def canonical_symbol(symbol: str | None) -> str | None:
+    """Convert a symbol with exchange code to Yahoo Finance format.
+
+    Handles MIC codes (Market Identifier Codes) like 'AAPL:xnas' or 'PIK:xjse'
+    and converts them to Yahoo Finance format like 'AAPL' or 'PIK.JO'.
+
+    Args:
+        symbol: Symbol string, optionally with exchange code (e.g., 'AAPL:xnas', '0700:xhkg')
+
+    Returns:
+        Symbol in Yahoo Finance format, or None if invalid
+    """
     if symbol is None:
         return None
     sym = str(symbol).strip()
     if not sym or sym.lower() == "nan":
         return None
-    sym = sym.split(":")[0]
-    sym = sym.replace(" ", "")
+
+    # Comprehensive MIC code to Yahoo Finance suffix mapping
+    # Based on ISO 10383 Market Identifier Codes
+    exchange_map = {
+        # North America
+        "XNAS": "",      # NASDAQ (no suffix needed)
+        "XNYS": "",      # New York Stock Exchange (no suffix needed)
+        "XNMS": "",      # NASDAQ Capital Market
+        "ARCX": "",      # NYSE Arca
+        "BATS": "",      # BATS Exchange
+        "XASE": "",      # NYSE American
+        "XTSE": ".TO",   # Toronto Stock Exchange
+        "XTSX": ".TO",   # Toronto Stock Exchange (alt)
+        "XCNQ": ".CN",   # Canadian Securities Exchange
+
+        # Europe
+        "XLON": ".L",    # London Stock Exchange
+        "XPAR": ".PA",   # Euronext Paris
+        "XAMS": ".AS",   # Euronext Amsterdam
+        "XBRU": ".BR",   # Euronext Brussels
+        "XLIS": ".LS",   # Euronext Lisbon
+        "XETR": ".DE",   # Deutsche Börse XETRA (Frankfurt)
+        "XFRA": ".F",    # Frankfurt Stock Exchange
+        "XSWX": ".SW",   # SIX Swiss Exchange
+        "XVTX": ".VX",   # SIX Swiss Exchange (VTX)
+        "XCSE": ".CO",   # Nasdaq Copenhagen
+        "XSTO": ".ST",   # Nasdaq Stockholm
+        "XHEL": ".HE",   # Nasdaq Helsinki
+        "XOSL": ".OL",   # Oslo Børs
+        "XICE": ".IC",   # Nasdaq Iceland
+        "XMIL": ".MI",   # Borsa Italiana (Milan)
+        "XMAD": ".MC",   # Bolsa de Madrid
+        "XLIS": ".LS",   # Euronext Lisbon
+        "XWBO": ".VI",   # Wiener Börse (Vienna)
+        "XPRA": ".PR",   # Prague Stock Exchange
+        "XBUD": ".BD",   # Budapest Stock Exchange
+        "XWAR": ".WA",   # Warsaw Stock Exchange
+
+        # Asia Pacific
+        "XHKG": ".HK",   # Hong Kong Stock Exchange
+        "XSHG": ".SS",   # Shanghai Stock Exchange
+        "XSHE": ".SZ",   # Shenzhen Stock Exchange
+        "XTKS": ".T",    # Tokyo Stock Exchange
+        "XKRX": ".KS",   # Korea Exchange
+        "XKOS": ".KS",   # Korea Exchange (alt)
+        "XTAI": ".TW",   # Taiwan Stock Exchange
+        "XSES": ".SI",   # Singapore Exchange
+        "XBOM": ".BO",   # Bombay Stock Exchange
+        "XNSE": ".NS",   # National Stock Exchange of India
+        "XASX": ".AX",   # Australian Securities Exchange
+        "XNZE": ".NZ",   # New Zealand Exchange
+        "XIDX": ".JK",   # Indonesia Stock Exchange
+        "XBKK": ".BK",   # Stock Exchange of Thailand
+        "XKLS": ".KL",   # Bursa Malaysia
+
+        # Middle East & Africa
+        "XJSE": ".JO",   # Johannesburg Stock Exchange
+        "XTAE": ".TA",   # Tel Aviv Stock Exchange
+        "XDFM": ".DU",   # Dubai Financial Market
+        "XADS": ".AD",   # Abu Dhabi Securities Exchange
+        "XSAU": ".SAU",  # Saudi Stock Exchange (Tadawul)
+
+        # Latin America
+        "BVMF": ".SA",   # B3 - Brasil Bolsa Balcão (São Paulo)
+        "XMEX": ".MX",   # Mexican Stock Exchange
+        "XBUE": ".BA",   # Buenos Aires Stock Exchange
+        "XSGO": ".SN",   # Santiago Stock Exchange
+        "XCOL": ".CO",   # Colombia Stock Exchange (may conflict with Copenhagen)
+    }
+
+    # Handle exchange suffixes (e.g., "0175:xhkg" -> "0175.HK")
+    if ":" in sym:
+        parts = sym.split(":", 1)
+        ticker = parts[0].strip()
+        exchange_code = parts[1].strip().upper()
+
+        # Look up the exchange suffix
+        suffix = exchange_map.get(exchange_code, "")
+
+        # Special handling for specific exchanges
+        if exchange_code == "XHKG" and ticker.isdigit():
+            # Hong Kong: Strip leading zeros to get 4-digit code (00700 -> 0700)
+            ticker = ticker.lstrip("0") or "0"
+            ticker = ticker.zfill(4)  # Ensure at least 4 digits
+        elif exchange_code == "XCSE":
+            # Copenhagen: Handle class suffixes like 'MAERSKb' -> 'MAERSK-B'
+            if ticker and ticker[-1].lower() in ('a', 'b'):
+                ticker = f"{ticker[:-1]}-{ticker[-1].upper()}"
+
+        sym = ticker + suffix
+    else:
+        # No exchange code - keep as is, but normalize
+        sym = sym.replace(" ", "")
+
     if not sym:
         return None
-    return sym.upper()
+
+    sym = sym.upper()
+
+    # Post-processing: Handle Hong Kong tickers with .HK suffix that have extra leading zeros
+    if ".HK" in sym:
+        parts = sym.split(".")
+        if len(parts) == 2 and parts[0].isdigit():
+            ticker = parts[0].lstrip("0") or "0"
+            ticker = ticker.zfill(4)  # Ensure 4 digits
+            sym = f"{ticker}.HK"
+
+    return sym
 
 
 def prices_from_yfinance(tickers: List[str], start: date, end: date) -> pd.DataFrame:
@@ -246,8 +360,10 @@ def load_latest_holdings_from_aggregated(path: str, top_n: int | None = None) ->
 
     latest["Amount Type Name"] = latest["Amount Type Name"].astype(str)
     cash_mask = latest["Amount Type Name"].str.contains("cash", case=False, na=False)
+    position_value_mask = latest["Amount Type Name"].str.contains("position value", case=False, na=False)
 
-    non_cash = latest[~cash_mask & latest["Instrument Description"].notna()].copy()
+    # Only include rows with "Position Value" in Amount Type Name for holdings
+    non_cash = latest[position_value_mask & latest["Instrument Description"].notna()].copy()
     cash_rows = latest[cash_mask].copy()
     if not cash_rows.empty:
         cash_rows["Instrument Description"] = "Cash"
@@ -262,7 +378,7 @@ def load_latest_holdings_from_aggregated(path: str, top_n: int | None = None) ->
         .astype(str)
         .str.strip()
     )
-    latest["symbol"] = latest["symbol"].str.split(":").str[0].str.strip()
+    # canonical_symbol now handles exchange suffixes properly
     latest["symbol"] = latest["symbol"].apply(canonical_symbol)
     latest["name_display"] = (
         latest["Instrument Description"]
@@ -298,6 +414,172 @@ def load_latest_holdings_from_aggregated(path: str, top_n: int | None = None) ->
     if top_n is not None:
         result = result.head(top_n)
     return result.reset_index(drop=True)
+
+
+def get_monthly_returns_by_symbol(path: str, as_of_date: date) -> dict[str, float]:
+    """Get monthly returns for all instruments for the month of as_of_date.
+
+    Args:
+        path: Path to the Excel file with Aggregated Amounts sheet
+        as_of_date: The date to determine which month to analyze
+
+    Returns:
+        Dictionary mapping symbol to compounded monthly return (as decimal)
+    """
+    df = pd.read_excel(
+        path,
+        sheet_name="Aggregated Amounts",
+        usecols=[
+            "Date",
+            "Instrument Description",
+            "Instrument Symbol",
+            "Underlying Instrument Symbol",
+            "Amount Client Currency",
+            "Amount Type Name",
+        ],
+    )
+
+    df["Date"] = pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
+    df = df.dropna(subset=["Date", "Amount Client Currency"])
+
+    # Filter for "Percent return per Instrument" rows
+    df["Amount Type Name"] = df["Amount Type Name"].astype(str)
+    returns_mask = df["Amount Type Name"].str.contains("percent return per instrument", case=False, na=False)
+    returns_df = df[returns_mask].copy()
+
+    if returns_df.empty:
+        return {}
+
+    # Filter for the month of as_of_date
+    as_of_ts = pd.Timestamp(as_of_date)
+    month_start = as_of_ts.replace(day=1)
+    month_end = (month_start + pd.offsets.MonthEnd(0))
+
+    month_df = returns_df[(returns_df["Date"] >= month_start) & (returns_df["Date"] <= month_end)].copy()
+
+    if month_df.empty:
+        return {}
+
+    # Get symbol for each instrument
+    month_df["symbol"] = (
+        month_df["Instrument Symbol"]
+        .fillna(month_df["Underlying Instrument Symbol"])
+        .fillna(month_df["Instrument Description"])
+        .astype(str)
+        .str.strip()
+    )
+    month_df["symbol"] = month_df["symbol"].apply(canonical_symbol)
+
+    # Skip cash entries
+    month_df = month_df[~month_df["symbol"].isin(["CASH", "USD", "CASHUSD"])]
+
+    # Get daily returns (already stored as decimals in Excel, e.g., 0.0032 for 0.32%)
+    month_df["daily_return"] = pd.to_numeric(month_df["Amount Client Currency"], errors="coerce")
+    month_df = month_df.dropna(subset=["daily_return"])
+
+    # Group by symbol and calculate compounded return
+    monthly_returns = {}
+    for symbol, group in month_df.groupby("symbol"):
+        # Calculate compounded return: (1 + r1) * (1 + r2) * ... - 1
+        compounded = (1 + group["daily_return"]).prod() - 1.0
+        monthly_returns[symbol] = compounded
+
+    return monthly_returns
+
+
+def calculate_monthly_winners_losers(
+    path: str,
+    as_of_date: date,
+    holdings: list[dict] | None = None,
+    top_n: int = 4
+) -> tuple[list[dict], list[dict]]:
+    """Calculate top winners and losers for the month based on value add/loss.
+
+    Args:
+        path: Path to the Excel file with Aggregated Amounts sheet
+        as_of_date: The date to determine which month to analyze
+        holdings: List of holdings with 'symbol' and 'weight' keys (optional)
+        top_n: Number of top winners and losers to return (default: 4)
+
+    Returns:
+        Tuple of (winners, losers) where each is a list of dicts with keys:
+        - name: Instrument name
+        - symbol: Instrument symbol
+        - return: Compounded return as decimal (e.g., 0.123 for 12.3%)
+        - value_add: Contribution to portfolio return (weight * return)
+    """
+    # Get all monthly returns
+    monthly_returns = get_monthly_returns_by_symbol(path, as_of_date)
+
+    if not monthly_returns:
+        return [], []
+
+    # Create symbol to weight mapping from holdings
+    symbol_to_weight = {}
+    if holdings:
+        for holding in holdings:
+            symbol = holding.get('yf_symbol') or holding.get('symbol')
+            weight = holding.get('weight', 0)
+            if symbol:
+                symbol_to_weight[symbol] = weight
+
+    # Get instrument names for the symbols
+    df = pd.read_excel(
+        path,
+        sheet_name="Aggregated Amounts",
+        usecols=[
+            "Instrument Description",
+            "Instrument Symbol",
+            "Underlying Instrument Symbol",
+        ],
+    )
+
+    # Create symbol to name mapping
+    df["symbol"] = (
+        df["Instrument Symbol"]
+        .fillna(df["Underlying Instrument Symbol"])
+        .fillna(df["Instrument Description"])
+        .astype(str)
+        .str.strip()
+    )
+    df["symbol"] = df["symbol"].apply(canonical_symbol)
+
+    df["name"] = (
+        df["Instrument Description"]
+        .fillna(df["Instrument Symbol"])
+        .fillna(df["Underlying Instrument Symbol"])
+        .astype(str)
+        .str.strip()
+    )
+
+    symbol_to_name = df.groupby("symbol")["name"].first().to_dict()
+
+    # Build results list with value add calculation
+    results = []
+    for symbol, ret in monthly_returns.items():
+        name = symbol_to_name.get(symbol, symbol)
+        weight = symbol_to_weight.get(symbol, 0)
+
+        # Calculate value add: contribution to portfolio return
+        value_add = weight * ret
+
+        results.append({
+            "name": name,
+            "symbol": symbol,
+            "return": ret,
+            "value_add": value_add,
+            "weight": weight
+        })
+
+    # Sort by value add (absolute contribution to portfolio performance)
+    results_sorted = sorted(results, key=lambda x: x["value_add"], reverse=True)
+
+    # Get top winners and losers by value impact
+    winners = results_sorted[:top_n] if len(results_sorted) >= top_n else results_sorted
+    losers = results_sorted[-top_n:] if len(results_sorted) >= top_n else []
+    losers.reverse()  # Show worst first
+
+    return winners, losers
 
 
 def load_symbol_overrides(path: str | None) -> dict:
@@ -447,17 +729,19 @@ def resolve_symbol_classification(symbol: str | None,
 
     cache_key = symbol_key or name_key or None
     cache_entry = cache.get(cache_key, {}) if cache_key else {}
+    cached_error = False
     if cache_entry:
-        sector_raw = cache_entry.get("sector")
-        industry_raw = cache_entry.get("industry")
-        country_raw = cache_entry.get("country")
-        yf_symbol_override = yf_symbol_override or cache_entry.get("yf_symbol")
+        # Don't use cached data if it's marked as an error - refetch it
         cached_error = bool(cache_entry.get("error"))
-    else:
-        cached_error = False
+        if not cached_error:
+            sector_raw = cache_entry.get("sector")
+            industry_raw = cache_entry.get("industry")
+            country_raw = cache_entry.get("country")
+            yf_symbol_override = yf_symbol_override or cache_entry.get("yf_symbol")
 
     fetch_symbol = yf_symbol_override or symbol_key
-    fetch_needed = bool(fetch_symbol) and (sector_raw is None or country_raw is None or industry_raw is None) and not cached_error
+    # Always refetch if there was a cached error OR if data is missing
+    fetch_needed = bool(fetch_symbol) and (cached_error or sector_raw is None or country_raw is None or industry_raw is None)
     if fetch_needed:
         try:
             info = yf.Ticker(fetch_symbol).info

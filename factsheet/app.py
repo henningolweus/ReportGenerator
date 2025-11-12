@@ -129,8 +129,8 @@ def build(config_path: str) -> str:
 
     # Replace a couple of text placeholders if present
     prs = ppt.open_presentation(prs_path)
-    today = dt.date.today()
-    issued_text = f"Fact Sheet|Issued {today.strftime('%d %B %Y')}"
+    # Use the as_of date from config, not today's date
+    issued_text = f"Fact Sheet|Issued {as_of.strftime('%d %B %Y')}"
     date_primary_ok = ppt.set_text_by_name(prs.slides, "DATE_ISSUED", issued_text)
     date_secondary_ok = ppt.set_text_by_name(prs.slides, "DATE_ISSUED_2", issued_text)
     date_ok = date_primary_ok or date_secondary_ok
@@ -181,7 +181,11 @@ def build(config_path: str) -> str:
     try:
         daily_returns_full = data.load_daily_portfolio_returns_from_performance(str(perf_file))
         daily_returns_full = daily_returns_full.sort_index()
-        daily_returns_full = daily_returns_full.loc[daily_returns_full.index <= target_end]
+        # Filter to use only data within the config date range
+        if start_date is not None:
+            daily_returns_full = daily_returns_full.loc[(daily_returns_full.index >= start_date) & (daily_returns_full.index <= target_end)]
+        else:
+            daily_returns_full = daily_returns_full.loc[daily_returns_full.index <= target_end]
         if not daily_returns_full.empty:
             daily_decimals = daily_returns_full
             ret_since_incept = (1.0 + daily_decimals).prod() - 1.0
@@ -218,12 +222,19 @@ def build(config_path: str) -> str:
         cum = data.load_accumulated_twr_from_performance(str(perf_file))
         cum = cum.sort_index()
         if not cum.empty:
-            inferred_start = cum.index.min()
-            start = max(start_date, inferred_start) if start_date is not None else inferred_start
-            end = min(target_end, cum.index.max())
-            if end >= start:
+            # Use config start_date if specified, otherwise use first available data
+            if start_date is not None:
+                start = start_date
+                inferred_start = start_date
+            else:
+                inferred_start = cum.index.min()
+                start = inferred_start
+            # Always use config as_of date as the end
+            end = target_end
+            # Filter data to only include the date range from config
+            cum = cum.loc[(cum.index >= start) & (cum.index <= end)]
+            if not cum.empty and end >= start:
                 full_index = pd.date_range(start=start, end=end, freq="D")
-                cum = cum.loc[(cum.index >= start) & (cum.index <= end)]
                 cum = cum.reindex(full_index).ffill()
                 perf_categories = full_index
                 port_usd = cum.tolist()
@@ -234,23 +245,31 @@ def build(config_path: str) -> str:
         try:
             daily = data.load_daily_portfolio_returns_from_performance(str(perf_file))
             daily = daily.sort_index()
-            daily = daily.loc[daily.index <= target_end]
             if not daily.empty:
-                if inferred_start is None:
-                    inferred_start = daily.index.min()
-                start = max(start_date, inferred_start) if start_date is not None else inferred_start
-                end = min(target_end, daily.index.max())
+                # Use config start_date if specified, otherwise use first available data
+                if start_date is not None:
+                    start = start_date
+                    if inferred_start is None:
+                        inferred_start = start_date
+                else:
+                    if inferred_start is None:
+                        inferred_start = daily.index.min()
+                    start = inferred_start
+                # Always use config as_of date as the end
+                end = target_end
+                # Filter data to only include the date range from config
                 daily = daily.loc[(daily.index >= start) & (daily.index <= end)]
-                full_index = pd.date_range(start=start, end=end, freq="D")
-                daily = daily.reindex(full_index).fillna(0.0)
-                cum = (1 + daily).cumprod()
-                if not cum.empty:
-                    if cum.iloc[0] == 0:
-                        cum.iloc[0] = 1.0
-                    cum = cum / cum.iloc[0] - 1.0
-                    cum.iloc[0] = 0.0
-                    perf_categories = full_index
-                    port_usd = cum.tolist()
+                if not daily.empty:
+                    full_index = pd.date_range(start=start, end=end, freq="D")
+                    daily = daily.reindex(full_index).fillna(0.0)
+                    cum = (1 + daily).cumprod()
+                    if not cum.empty:
+                        if cum.iloc[0] == 0:
+                            cum.iloc[0] = 1.0
+                        cum = cum / cum.iloc[0] - 1.0
+                        cum.iloc[0] = 0.0
+                        perf_categories = full_index
+                        port_usd = cum.tolist()
         except Exception:
             # Ignore failures and fall back to synthetic series below
             pass
@@ -707,20 +726,70 @@ def build(config_path: str) -> str:
                     region_for_prompt.append((label, value))
         holdings_for_prompt = sorted(classified_records, key=lambda item: item.get("weight", 0.0), reverse=True)[:10]
 
+        # Get monthly returns for all instruments and add to holdings
+        monthly_returns_by_symbol = {}
+        try:
+            monthly_returns_by_symbol = data.get_monthly_returns_by_symbol(str(perf_file), as_of)
+            # Add monthly return to each holding
+            for holding in holdings_for_prompt:
+                symbol = holding.get('yf_symbol') or holding.get('symbol')
+                if symbol and symbol in monthly_returns_by_symbol:
+                    holding['monthly_return'] = monthly_returns_by_symbol[symbol]
+                    holding['monthly_return_pct'] = monthly_returns_by_symbol[symbol] * 100
+        except Exception as e:
+            print(f"Warning: Failed to get monthly returns: {e}")
+
+        # Get current month performance
+        port_mtd = None
+        bench_mtd = None
+        if port_monthly is not None and not port_monthly.empty:
+            port_mtd = port_monthly.iloc[-1]
+        if bench_monthly is not None and not bench_monthly.empty:
+            bench_mtd = bench_monthly.iloc[-1]
+
+        # Calculate top winners and losers for the month (by value add/loss)
+        top_winners = []
+        top_losers = []
+        print(f"\nCalculating monthly winners/losers by value impact from {perf_file}...")
+        try:
+            winners, losers = data.calculate_monthly_winners_losers(
+                str(perf_file),
+                as_of,
+                holdings=classified_records,
+                top_n=4
+            )
+            top_winners = winners
+            top_losers = losers
+            print(f"  ✓ Found {len(winners)} winners and {len(losers)} losers")
+            if winners:
+                w = winners[0]
+                print(f"  Top winner: {w['name']} (return: {w['return']:.2%}, value add: {w['value_add']:.2%})")
+            if losers:
+                l = losers[0]
+                print(f"  Top loser: {l['name']} (return: {l['return']:.2%}, value add: {l['value_add']:.2%})")
+        except Exception as e:
+            print(f"  ✗ Warning: Failed to calculate monthly winners/losers: {e}")
+            import traceback
+            traceback.print_exc()
+
         commentary_context = {
             "as_of": as_of.isoformat(),
             "portfolio": {
                 "ytd": format_pct(ytd_return),
                 "since_inception": format_pct(ret_since_incept),
                 "cagr": format_pct(avg_yearly_return),
+                "mtd": format_pct(port_mtd) if port_mtd is not None and pd.notna(port_mtd) else "n/a",
             },
             "benchmark": {
                 "ytd": format_pct(bench_ytd) if bench_ytd is not None else "n/a",
                 "cagr": format_pct(bench_cagr) if bench_cagr is not None else "n/a",
+                "mtd": format_pct(bench_mtd) if bench_mtd is not None and pd.notna(bench_mtd) else "n/a",
             },
             "sectors": sector_for_prompt,
             "regions": region_for_prompt,
             "holdings": holdings_for_prompt,
+            "top_winners": top_winners,
+            "top_losers": top_losers,
         }
 
         commentary_result = commentary.generate_commentary(commentary_context, commentary_cfg)
